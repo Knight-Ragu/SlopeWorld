@@ -1,0 +1,10 @@
+{
+    "id": "knightragu.slopeworld",
+    "name": "Slope World",
+    "version": "1.0.0",
+    "authors": "Knight-Ragu",
+    "description": "Make all slopes behave like watcher dunes!",
+    "requirements": [],
+    "requirements_names": [],
+    "checksum_override_version": false
+}

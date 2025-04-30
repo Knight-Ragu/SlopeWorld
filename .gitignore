@@ -1,0 +1,9 @@
+obj/
+bin/
+
+*.pdb
+Mod/v1.10.1
+
+Mod/assetbundles/inputdisplay2.0.manifest
+Mod/assetbundles/assetbundles
+Mod/assetbundles/assetbundles.manifest
