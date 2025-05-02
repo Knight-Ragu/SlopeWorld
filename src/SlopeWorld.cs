@@ -76,21 +76,19 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 			orig(self);
 			self.owner.bodyChunks[1].onSlope = 0;
 		}
-		else {
-			orig(self);
-		}
+		else orig(self);
     }
 
     private void BodyChunk_checkAgainstSlopesVertically(On.BodyChunk.orig_checkAgainstSlopesVertically orig, BodyChunk self)
     {	
 		Player? player = self.owner as Player;
 		StrongBox<int>? onSlopeBox = null;
-		if (player is not null) onSlopeValues.TryGetValue(player, out onSlopeBox);
-
-		if (player is not null && player.bodyChunks[0] == self) Debug.Log($"{player!.animation}, {player.bodyMode}, {self.vel}");
-
-		if (onSlopeBox is not null)
+		if (player is not null && onSlopeValues.TryGetValue(player, out onSlopeBox))
+		{
 			onSlopeBox.Value = 0;
+
+			// if (player is not null && player.bodyChunks[0] == self) Debug.Log($"{player!.animation}, {player.bodyMode}, {self.vel}");
+		}
 
         IntVector2 tilePosition = self.owner.room.GetTilePosition(self.pos);
 		IntVector2 b = new IntVector2(0, 0);
