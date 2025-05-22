@@ -1,8 +1,8 @@
 ﻿using BepInEx;
 using RWCustom;
 using System;
+using System.Globalization;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Security.Permissions;
 using UnityEngine;
 
@@ -15,20 +15,19 @@ namespace SlopeWorld;
 [BepInPlugin(ModID, ModName, Version)]
 public sealed partial class SlopeWorld : BaseUnityPlugin
 {
-    public const string ModName = "Slope World";
     public const string ModID = "knightragu.slopeworld";
+    public const string ModName = "Slope World";
     public const string Version = "1.0.0";
 
     public static SlopeWorld Instance { get; private set; }
-
-	private static readonly ConditionalWeakTable<Player, StrongBox<int>> onSlopeValues = new ConditionalWeakTable<Player, StrongBox<int>>();
-
+	public static SlopeWorldOptions options { get; private set; }
 
     public void OnEnable()
     {
         try
         {
             Instance = this;
+			options = new();
 
             On.RainWorld.OnModsInit += RainWorld_OnModsInit;
         }
@@ -49,10 +48,18 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
         try
         {
+			MachineConnector.SetRegisteredOI(ModID, options);
+
+			// Slope physics changes
             On.BodyChunk.checkAgainstSlopesVertically += BodyChunk_checkAgainstSlopesVertically;
 
-			On.Player.ctor += Player_ctor;
-			On.PlayerGraphics.Update += PlayerGraphics_Update;
+			// Always tell all these functions that the onSlope value is 0
+			On.Player.Jump += (orig, self) => SpoofOnSlope(orig, self);
+			On.Player.UpdateAnimation += (orig, self) => SpoofOnSlope(orig, self);
+			On.Player.UpdateBodyMode += (orig, self) => SpoofOnSlope(orig, self);
+
+			// Slope crawlturn patch
+			On.Player.MovementUpdate += Player_MovementUpdate;
         }
 
         catch (Exception e)
@@ -61,35 +68,61 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
         }
     }
 
-    private void Player_ctor(On.Player.orig_ctor orig, Player self, AbstractCreature abstractCreature, World world)
+	private void SpoofOnSlope(Delegate orig, Player self)
+	{
+		var chunk0 = self.bodyChunks[0];
+		var chunk1 = self.bodyChunks[1];
+
+		(int onSlope0, int onSlope1) = (chunk0.onSlope, chunk1.onSlope);
+
+		chunk0.onSlope = 0;
+		chunk1.onSlope = 0;
+
+        orig.Method.Invoke(null, [self]);
+		
+		chunk0.onSlope = onSlope0;
+		chunk1.onSlope = onSlope1;
+	}
+	
+
+    private void Player_MovementUpdate(On.Player.orig_MovementUpdate orig, Player self, bool eu)
     {
-		orig(self, abstractCreature, world);
+		var chunk0 = self.bodyChunks[0];
+		var chunk1 = self.bodyChunks[1];
 
-		onSlopeValues.Add(self, new StrongBox<int>(0));
-    }
+		(int onSlope0, int onSlope1) = (chunk0.onSlope, chunk1.onSlope);
+		
+		// Make crawlturns faster
 
-    private void PlayerGraphics_Update(On.PlayerGraphics.orig_Update orig, PlayerGraphics self)
-    {	
-		if (self.owner is Player player && onSlopeValues.TryGetValue(player, out var onSlope))
+		if ((options.EnablePatches.Value && onSlope0 != 0) || options.SillyMode.Value)
 		{
-			self.owner.bodyChunks[1].onSlope = onSlope.Value;
-			orig(self);
-			self.owner.bodyChunks[1].onSlope = 0;
+			var input = self.input[0];
+			Vector2 vector = new Vector2(onSlope0, 1f).normalized;
+
+			bool facingRight = chunk0.pos.x - 5f > chunk1.pos.x;
+
+			if (onSlope0 == -1)
+				facingRight = !facingRight;
+
+			if (input.x == -onSlope0 && facingRight) {
+				chunk0.vel += vector * 5f; 
+			}
+			else
+				chunk0.vel.y = Mathf.Min(0.0f, chunk0.vel.y);
 		}
-		else orig(self);
+
+		chunk0.onSlope = 0;
+		chunk1.onSlope = 0;
+
+        orig(self, eu);
+		
+		chunk0.onSlope = onSlope0;
+		chunk1.onSlope = onSlope1;
     }
+	
 
     private void BodyChunk_checkAgainstSlopesVertically(On.BodyChunk.orig_checkAgainstSlopesVertically orig, BodyChunk self)
     {	
-		Player? player = self.owner as Player;
-		StrongBox<int>? onSlopeBox = null;
-		if (player is not null && onSlopeValues.TryGetValue(player, out onSlopeBox))
-		{
-			onSlopeBox.Value = 0;
-
-			// if (player is not null && player.bodyChunks[0] == self) Debug.Log($"{player!.animation}, {player.bodyMode}, {self.vel}");
-		}
-
         IntVector2 tilePosition = self.owner.room.GetTilePosition(self.pos);
 		IntVector2 b = new IntVector2(0, 0);
 		Room.SlopeDirection a = self.owner.room.IdentifySlope(self.pos);
@@ -155,11 +188,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 				// self.vel.x += Mathf.Abs(self.vel.y) * Mathf.Clamp(0.5f - self.owner.surfaceFriction, 0f, 0.5f) * (float)num * 0.2f;
 				// self.vel.y = 0f;
 
-				// self.onSlope = num;
-				
-
-				if (onSlopeBox is not null)
-					onSlopeBox.Value = num;
+				self.onSlope = num;
 
 				self.slopeRad = self.TerrainRad - 1f;
 
@@ -194,32 +223,23 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 				self.vel.y += num6;
 				self.vel.x *= Mathf.Clamp(self.owner.surfaceFriction * 2f, 0f, 1f);
 
-				bool headChunk = player is not null && player.bodyChunks[0] == self;
-				if (!headChunk) self.vel.y = Mathf.Min(0.0f, self.vel.y); // Fix esliding over slopes, and spear bouncing
-
-				self.vel = Vector2.ClampMagnitude(self.vel, magnitude);
-
-
-				if (!headChunk || player!.input == null) return;
-
-				var input = player!.input[0];
-				
-				// Make crawlturns faster
-
-				bool facingRight = player!.bodyChunks[0].pos.x - 5f > player.bodyChunks[1].pos.x;
-
-				if (num == -1)
-					facingRight = !facingRight;
-
-				if (input.x == -num && facingRight) {
-					self.vel += vector * 5f; 
-					Log("Turn");
+				do {
+					try {
+						if (self.owner is Player player && player.bodyChunks[0] == self)
+							break;
+					}
+					catch(Exception ex) {
+						LogError(ex);
+					}
+					
+					if (options.EnablePatches.Value) self.vel.y = Mathf.Min(0.0f, self.vel.y); // Fix eslides over slopes, and spear bouncing
 				}
-				else
-					self.vel.y = Mathf.Min(0.0f, self.vel.y);
+				while (false);
+				
+				self.vel = Vector2.ClampMagnitude(self.vel, magnitude);
 				
 				return;
-			}
+			} 
 
 			if (num3 == 1 && self.pos.y >= num2 - self.slopeRad - self.slopeRad)
 			{

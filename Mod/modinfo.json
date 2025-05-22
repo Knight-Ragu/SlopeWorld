@@ -3,7 +3,7 @@
     "name": "Slope World",
     "version": "1.0.0",
     "authors": "Knight-Ragu",
-    "description": "Make all slopes behave like watcher dunes!",
+    "description": "Gives all slopes the same physics as the TerrainCurves from watcher,\n allowing for more movement options, like crawl turns!",
     "requirements": [],
     "requirements_names": [],
     "checksum_override_version": false
