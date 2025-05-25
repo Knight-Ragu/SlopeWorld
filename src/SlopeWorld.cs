@@ -1,9 +1,10 @@
 ﻿using BepInEx;
 using Mono.Cecil.Cil;
 using MonoMod.Cil;
+using MonoMod.RuntimeDetour;
 using RWCustom;
+using SimplifiedMoveset;
 using System;
-using System.Globalization;
 using System.Reflection;
 using System.Security.Permissions;
 using UnityEngine;
@@ -21,7 +22,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 {
     public const string ModID = "knightragu.slopeworld";
     public const string ModName = "Slope World";
-    public const string Version = "1.1.0";
+    public const string Version = "1.1.1";
 
     public static SlopeWorld Instance { get; private set; }
 	public static SlopeWorldOptions options { get; private set; }
@@ -42,10 +43,37 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
         }
     }
 
+    public void BodyChunkMod_IL_BodyChunk_CheckAgainstSlopesVertically(Action<ILContext> _, ILContext _1)
+	{ }
+
+	public static void HookSimplifiedMoveset()
+	{
+		new Hook(
+			typeof(BodyChunkMod).GetMethod("IL_BodyChunk_CheckAgainstSlopesVertically", BindingFlags.NonPublic | BindingFlags.Static),
+			delegate(Action<ILContext> _, ILContext _) {}
+		);
+	} 
+	
+	private bool preModInit;
     private bool modInit;
     private void RainWorld_OnModsInit(On.RainWorld.orig_OnModsInit orig, RainWorld self)
     {
-        orig(self);
+		// Both my IL hooks and simplified moveset's at the same time causes very strange behaviour
+		if (!preModInit)
+			try {
+				if (ModManager.ActiveMods.Exists(m => m.id == "SimplifiedMoveset"))
+				{
+					HookSimplifiedMoveset();
+
+					preModInit = true;
+				}
+			}
+		catch (Exception e)
+		{
+			Logger.LogError(e);
+		}
+
+       	orig(self);
 
         if (modInit) return;
         modInit = true;
@@ -134,7 +162,42 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 		if (c.TryGotoNext(
 			x => x.MatchLdsfld<AnimationIndex>("BellySlide"),
 			x => x.MatchCall("ExtEnum`1<Player/AnimationIndex>", "op_Equality")
-		))
+		)) {
+
+			for (int i = 0; i < 2; i++)
+				if (c.TryGotoNext(
+					x => x.MatchLdarg(0),
+					x => x.MatchLdcI4(1 - i),
+					x => x.MatchLdcI4(0),
+					x => x.MatchLdcI4(-2),
+					x => x.MatchCall<PhysicalObject>("IsTileSolid")
+				)) {
+
+					var enterIf = c.Prev.Operand;
+					c.Goto(c.Index + 5);
+
+					c.Emit(OpCodes.Brtrue_S, enterIf);
+
+					c.Emit(OpCodes.Ldarg_0);
+					c.EmitDelegate<Func<Player, bool>>(player =>
+					{
+						if (!options.EnableSlides.Value || player.room is not Room room) return false;
+						
+						var chunk0 = player.bodyChunks[0];
+						var chunk1 = player.bodyChunks[1];
+						
+						bool head = IsTileSlope(room, chunk0, 0, -1) || IsTileSlope(room, chunk0, 0, -2);
+						bool feet = IsTileSlope(room, chunk1, 0, -1) || IsTileSlope(room, chunk1, 0, -2);
+
+						return head || feet;
+					});
+				}
+				else LogError($"{il.Method.Name}: Il hook failed to match slide stick logic! {i}");
+			
+
+
+
+
 			if (c.TryGotoNext(
 				x => x.MatchLdarg(0),
 				x => x.MatchLdcI4(0),
@@ -142,7 +205,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 				x => x.MatchRet()
 			)) {
 				
-				var exit = c.Next;
+				var continueSlide = c.Next;
 
 				if (c.TryGotoPrev(
 					x => x.MatchLdarg(0),
@@ -151,7 +214,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 					x => x.MatchLdcI4(-1),
 					x => x.MatchCall<PhysicalObject>("IsTileSolid")
 				)) {
-
+					
 					c.Goto(c.Index + 1);
 
 					Log($"{il.Method.Name} | {c}");
@@ -168,22 +231,21 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 						bool head = IsTileSlope(room, player.bodyChunks[0], 0, -1) || IsTileSlope(room, player.bodyChunks[0], 0, -2);
 						bool feet = IsTileSlope(room, player.bodyChunks[1], 0, -1) || IsTileSlope(room, player.bodyChunks[0], 0, -2);
 
-						Log($"Keep sliding: {head || feet}");
+						// Log($"Keep sliding: {head || feet}");
 
+						// Not entirely sure what those other conditions mean
 						return (head || feet) && !(player.input[0].jmp && !player.input[1].jmp && player.rollCounter > 0 && player.rollCounter < (player.longBellySlide ? num13 : num12));
 					});
 
-					c.Emit(OpCodes.Brtrue_S, exit);
+					c.Emit(OpCodes.Brtrue_S, continueSlide);
 					
 					c.Emit(OpCodes.Ldarg_0);
-
-				} else
-					Log($"{il.Method.Name}: Il hook failed to match slide end conditions!");
+				}
+				else LogError($"{il.Method.Name}: Il hook failed to match slide end conditions!");
 			}
-			else
-				Log($"{il.Method.Name}: Il hook failed to match slide end logic!");
-		else
-			Log($"{il.Method.Name}: Il hook failed to match BellySlide logic!");
+			else Log($"{il.Method.Name}: Il hook failed to match slide end logic!");
+		}
+		else LogError($"{il.Method.Name}: Il hook failed to match BellySlide logic!");
 	}
 
 	public bool IsTileSlope(Room room, BodyChunk chunk, int relative_x, int relative_y)
@@ -192,7 +254,6 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
 	private void BodyChunk_checkAgainstSlopesVertically(ILContext il)
 	{
-		// System.Reflection.Emit.OpCodes.Br_S
 		ILCursor c = new ILCursor(il);
 
 		if (c.TryGotoNext(
@@ -261,11 +322,9 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
 				c.Emit(OpCodes.Br, instr);
 			}
-			else
-				LogError($"{il.Method.Name} Il hook match set pos.y failed!");
+			else LogError($"{il.Method.Name} Il hook match set pos.y failed!");
 		}
-		else
-			LogError($"{il.Method.Name} Il hook match set_onSlope failed!");
+		else LogError($"{il.Method.Name} Il hook match set_onSlope failed!");
 	}
 
     internal static void Log(object msg)

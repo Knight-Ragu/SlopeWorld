@@ -75,6 +75,6 @@ public class SlopeWorldOptions : OptionInterface
 
     public override string ValidationString()
     {
-        return $"{base.ValidationString()} {(EnablePatches.Value ? "PE" : "PD")} {(SillyMode.Value ? "Silly!!" : "NoSilly")}";
+        return $"{base.ValidationString()} {(EnablePatches.Value ? "P " : "")}{(EnableSlides.Value ? "S " : "")}{(SillyMode.Value ? "Silly!!" : "NoSilly")}";
     }
 }
