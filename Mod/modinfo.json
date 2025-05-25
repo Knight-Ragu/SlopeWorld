@@ -1,9 +1,9 @@
 {
     "id": "knightragu.slopeworld",
     "name": "Slope World",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "authors": "Knight-Ragu",
-    "description": "Gives all slopes the same physics as the TerrainCurves from watcher,\n allowing for more movement options, like crawl turns!",
+    "description": "Gives all slopes the same physics as the TerrainCurves from watcher,\n allowing for more movement options, including crawl turns and slides!",
     "requirements": [],
     "requirements_names": [],
     "checksum_override_version": false

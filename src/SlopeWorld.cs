@@ -7,6 +7,8 @@ using System.Globalization;
 using System.Reflection;
 using System.Security.Permissions;
 using UnityEngine;
+using static Player;
+using static Room;
 
 [assembly: AssemblyVersion(SlopeWorld.SlopeWorld.Version)]
 #pragma warning disable CS0618
@@ -19,7 +21,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 {
     public const string ModID = "knightragu.slopeworld";
     public const string ModName = "Slope World";
-    public const string Version = "1.0.0";
+    public const string Version = "1.1.0";
 
     public static SlopeWorld Instance { get; private set; }
 	public static SlopeWorldOptions options { get; private set; }
@@ -55,6 +57,9 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 			// Slope physics changes
             IL.BodyChunk.checkAgainstSlopesVertically += BodyChunk_checkAgainstSlopesVertically;
 
+			// Make slides work on slopes (thanks to simplified moveset for reference!)
+			IL.Player.UpdateAnimation += Player_UpdateAnimation;
+
 			// Always tell all these functions that the onSlope value is 0
 			On.Player.Jump += (orig, self) => SpoofOnSlope(orig, self);
 			On.Player.UpdateAnimation += (orig, self) => SpoofOnSlope(orig, self);
@@ -85,7 +90,6 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 		chunk0.onSlope = onSlope0;
 		chunk1.onSlope = onSlope1;
 	}
-	
 
     private void Player_MovementUpdate(On.Player.orig_MovementUpdate orig, Player self, bool eu)
     {
@@ -122,6 +126,70 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 		chunk1.onSlope = onSlope1;
     }
 	
+
+	private void Player_UpdateAnimation(ILContext il)
+	{
+		var c = new ILCursor(il);
+
+		if (c.TryGotoNext(
+			x => x.MatchLdsfld<AnimationIndex>("BellySlide"),
+			x => x.MatchCall("ExtEnum`1<Player/AnimationIndex>", "op_Equality")
+		))
+			if (c.TryGotoNext(
+				x => x.MatchLdarg(0),
+				x => x.MatchLdcI4(0),
+				x => x.MatchStfld<Player>("standing"),
+				x => x.MatchRet()
+			)) {
+				
+				var exit = c.Next;
+
+				if (c.TryGotoPrev(
+					x => x.MatchLdarg(0),
+					x => x.MatchLdcI4(0),
+					x => x.MatchLdcI4(0),
+					x => x.MatchLdcI4(-1),
+					x => x.MatchCall<PhysicalObject>("IsTileSolid")
+				)) {
+
+					c.Goto(c.Index + 1);
+
+					Log($"{il.Method.Name} | {c}");
+
+					c.Emit(OpCodes.Ldloc_S, (byte)27);
+					c.Emit(OpCodes.Ldloc_S, (byte)28);
+
+					c.EmitDelegate<Func<Player, int, int, bool>>((player, num12, num13) =>
+					{
+						if (!options.EnableSlides.Value) return false;
+
+						if (player.room is not Room room) return false;
+						
+						bool head = IsTileSlope(room, player.bodyChunks[0], 0, -1) || IsTileSlope(room, player.bodyChunks[0], 0, -2);
+						bool feet = IsTileSlope(room, player.bodyChunks[1], 0, -1) || IsTileSlope(room, player.bodyChunks[0], 0, -2);
+
+						Log($"Keep sliding: {head || feet}");
+
+						return (head || feet) && !(player.input[0].jmp && !player.input[1].jmp && player.rollCounter > 0 && player.rollCounter < (player.longBellySlide ? num13 : num12));
+					});
+
+					c.Emit(OpCodes.Brtrue_S, exit);
+					
+					c.Emit(OpCodes.Ldarg_0);
+
+				} else
+					Log($"{il.Method.Name}: Il hook failed to match slide end conditions!");
+			}
+			else
+				Log($"{il.Method.Name}: Il hook failed to match slide end logic!");
+		else
+			Log($"{il.Method.Name}: Il hook failed to match BellySlide logic!");
+	}
+
+	public bool IsTileSlope(Room room, BodyChunk chunk, int relative_x, int relative_y)
+        => room.GetTile(room.GetTilePosition(chunk.pos) + new IntVector2(relative_x, relative_y)).Terrain == Tile.TerrainType.Slope;
+
+
 	private void BodyChunk_checkAgainstSlopesVertically(ILContext il)
 	{
 		// System.Reflection.Emit.OpCodes.Br_S
@@ -132,6 +200,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 			x => x.MatchLdloc(4),
 			x => x.MatchCall<BodyChunk>("set_onSlope")
 		)) {
+
 			var instr = c.Next;
 
 			if (c.TryGotoPrev(
@@ -140,9 +209,9 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 				x => x.MatchAdd(),
 				x => x.MatchStfld<Vector2>("y")
 			)) {
-				c.Index += 4;
+				c.Goto(c.Index + 4);
 
-				Log($"Instructs: {c}");
+				Log($"{il.Method.Name} | {c}");
 
 				c.Emit(OpCodes.Ldarg_0);
 				c.Emit(OpCodes.Ldloc_S, (byte)4);
@@ -151,7 +220,6 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 					// Dune collision code
 					
 					Vector2 vector = new Vector2(num, 1f).normalized;
-					Log($"num is: {num}");
 					self.terrainCurveNormal = vector;
 					float num5 = -self.vel.y * vector.y;
 					if (num5 > self.owner.impactTreshhold)
@@ -173,6 +241,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 					self.vel.y += num6;
 					self.vel.x *= Mathf.Clamp(self.owner.surfaceFriction * 2f, 0f, 1f);
 
+					// Fix esliding over slopes, and spear bouncing
 					if (options.EnablePatches.Value)
 						do {
 							try {
@@ -183,28 +252,20 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 								LogError(ex);
 							}
 							
-							self.vel.y = Mathf.Min(0.0f, self.vel.y); // Fix esliding over slopes, and spear bouncing
+							self.vel.y = Mathf.Min(0.0f, self.vel.y);
 						}
 						while (false);
 					
 					self.vel = Vector2.ClampMagnitude(self.vel, magnitude);
 				});
 
-				Log($"Instructs aft: {c}");
-
 				c.Emit(OpCodes.Br, instr);
-
-				Log($"Instructs done: {c}");
 			}
 			else
-			{
 				LogError($"{il.Method.Name} Il hook match set pos.y failed!");
-			}
 		}
 		else
-		{
 			LogError($"{il.Method.Name} Il hook match set_onSlope failed!");
-		}
 	}
 
     internal static void Log(object msg)
