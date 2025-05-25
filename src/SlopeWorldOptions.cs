@@ -28,7 +28,7 @@ public class SlopeWorldOptions : OptionInterface
                 new OpLabel(pos, new Vector2(300, 64), "Settings", FLabelAlignment.Left, true)
             );
              
-            description = "Enable my patches for slow crawl turns, and bouncy spears/eslide bouncing\nDisable if you are curious what the raw dune physics on slopes is like";
+            description = "Enable my patches for slow crawl turns, and bouncy spears / eslide bouncing\nDisable if you are curious what the raw TerrainCurve physics on slopes is like";
             pos.y -= 36;
 			
             Tabs[0].AddItems(
@@ -60,6 +60,6 @@ public class SlopeWorldOptions : OptionInterface
 
     public override string ValidationString()
     {
-        return $"{(EnablePatches.Value ? "Patches-Enabled" : "Patches-Disabled")} {(SillyMode.Value ? "Silly!!" : "No-Silly :(")} {base.ValidationString()}";
+        return $"{base.ValidationString()} {(EnablePatches.Value ? "PE" : "PD")} {(SillyMode.Value ? "Silly!!" : "NoSilly")}";
     }
 }

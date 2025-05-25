@@ -1,4 +1,6 @@
 ﻿using BepInEx;
+using Mono.Cecil.Cil;
+using MonoMod.Cil;
 using RWCustom;
 using System;
 using System.Globalization;
@@ -51,7 +53,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 			MachineConnector.SetRegisteredOI(ModID, options);
 
 			// Slope physics changes
-            On.BodyChunk.checkAgainstSlopesVertically += BodyChunk_checkAgainstSlopesVertically;
+            IL.BodyChunk.checkAgainstSlopesVertically += BodyChunk_checkAgainstSlopesVertically;
 
 			// Always tell all these functions that the onSlope value is 0
 			On.Player.Jump += (orig, self) => SpoofOnSlope(orig, self);
@@ -120,137 +122,90 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 		chunk1.onSlope = onSlope1;
     }
 	
+	private void BodyChunk_checkAgainstSlopesVertically(ILContext il)
+	{
+		// System.Reflection.Emit.OpCodes.Br_S
+		ILCursor c = new ILCursor(il);
 
-    private void BodyChunk_checkAgainstSlopesVertically(On.BodyChunk.orig_checkAgainstSlopesVertically orig, BodyChunk self)
-    {	
-        IntVector2 tilePosition = self.owner.room.GetTilePosition(self.pos);
-		IntVector2 b = new IntVector2(0, 0);
-		Room.SlopeDirection a = self.owner.room.IdentifySlope(self.pos);
-		if (self.owner.room.GetTile(self.pos).Terrain != Room.Tile.TerrainType.Slope)
-		{
-			if (self.owner.room.IdentifySlope(tilePosition.x - 1, tilePosition.y) != Room.SlopeDirection.Broken && self.pos.x - self.slopeRad <= self.owner.room.MiddleOfTile(self.pos).x - 10f)
-			{
-				a = self.owner.room.IdentifySlope(tilePosition.x - 1, tilePosition.y);
-				b.x = -1;
-			}
-			else if (self.owner.room.IdentifySlope(tilePosition.x + 1, tilePosition.y) != Room.SlopeDirection.Broken && self.pos.x + self.slopeRad >= self.owner.room.MiddleOfTile(self.pos).x + 10f)
-			{
-				a = self.owner.room.IdentifySlope(tilePosition.x + 1, tilePosition.y);
-				b.x = 1;
-			}
-			else if (self.pos.y - self.slopeRad < self.owner.room.MiddleOfTile(self.pos).y - 10f)
-			{
-				if (self.owner.room.IdentifySlope(tilePosition.x, tilePosition.y - 1) != Room.SlopeDirection.Broken)
+		if (c.TryGotoNext(
+			x => x.MatchLdarg(0),
+			x => x.MatchLdloc(4),
+			x => x.MatchCall<BodyChunk>("set_onSlope")
+		)) {
+			var instr = c.Next;
+
+			if (c.TryGotoPrev(
+				x => x.MatchLdarg(0),
+				x => x.MatchLdfld<BodyChunk>("slopeRad"),
+				x => x.MatchAdd(),
+				x => x.MatchStfld<Vector2>("y")
+			)) {
+				c.Index += 4;
+
+				Log($"Instructs: {c}");
+
+				c.Emit(OpCodes.Ldarg_0);
+				c.Emit(OpCodes.Ldloc_S, (byte)4);
+				c.EmitDelegate<Action<BodyChunk, int>>((self, num) =>
 				{
-					a = self.owner.room.IdentifySlope(tilePosition.x, tilePosition.y - 1);
-					b.y = -1;
-				}
-			}
-			else if (self.pos.y + self.slopeRad > self.owner.room.MiddleOfTile(self.pos).y + 10f && self.owner.room.IdentifySlope(tilePosition.x, tilePosition.y + 1) != Room.SlopeDirection.Broken)
-			{
-				a = self.owner.room.IdentifySlope(tilePosition.x, tilePosition.y + 1);
-				b.y = 1;
-			}
-		}
-		if (a != Room.SlopeDirection.Broken)
-		{
-			Vector2 vector = self.owner.room.MiddleOfTile(self.owner.room.GetTilePosition(self.pos) + b);
-			int num = 0;
-			float num2;
-			int num3;
-			if (a == Room.SlopeDirection.UpLeft)
-			{
-				num = -1;
-				num2 = self.pos.x - (vector.x - 10f) + (vector.y - 10f);
-				num3 = -1;
-			}
-			else if (a == Room.SlopeDirection.UpRight)
-			{
-				num = 1;
-				num2 = 20f - (self.pos.x - (vector.x - 10f)) + (vector.y - 10f);
-				num3 = -1;
-			}
-			else if (a == Room.SlopeDirection.DownLeft)
-			{
-				num2 = 20f - (self.pos.x - (vector.x - 10f)) + (vector.y - 10f);
-				num3 = 1;
+					// Dune collision code
+					
+					Vector2 vector = new Vector2(num, 1f).normalized;
+					Log($"num is: {num}");
+					self.terrainCurveNormal = vector;
+					float num5 = -self.vel.y * vector.y;
+					if (num5 > self.owner.impactTreshhold)
+					{
+						self.owner.TerrainImpact(self.index, new IntVector2(0, -1), num5, self.lastContactPoint.y > -1);
+					}
+
+					self.contactPoint.y = -1;
+
+					float magnitude = self.vel.magnitude;
+					float num6 = self.vel.x * -vector.x / vector.y;
+
+					self.vel.y -= num6;
+					self.vel.y = Mathf.Abs(self.vel.y) * self.owner.bounce;
+
+					if (self.vel.y < self.owner.gravity || self.vel.y < 1f + 9f * (1f - self.owner.bounce))
+						self.vel.y = 0f;
+
+					self.vel.y += num6;
+					self.vel.x *= Mathf.Clamp(self.owner.surfaceFriction * 2f, 0f, 1f);
+
+					if (options.EnablePatches.Value)
+						do {
+							try {
+								if (self.owner is Player player && player.bodyChunks[0] == self)
+									break;
+							}
+							catch(Exception ex) {
+								LogError(ex);
+							}
+							
+							self.vel.y = Mathf.Min(0.0f, self.vel.y); // Fix esliding over slopes, and spear bouncing
+						}
+						while (false);
+					
+					self.vel = Vector2.ClampMagnitude(self.vel, magnitude);
+				});
+
+				Log($"Instructs aft: {c}");
+
+				c.Emit(OpCodes.Br, instr);
+
+				Log($"Instructs done: {c}");
 			}
 			else
 			{
-				num2 = self.pos.x - (vector.x - 10f) + (vector.y - 10f);
-				num3 = 1;
-			}
-			if (num3 == -1 && self.pos.y <= num2 + self.slopeRad + self.slopeRad)
-			{
-				self.pos.y = num2 + self.slopeRad + self.slopeRad;
-				// self.contactPoint.y = -1;
-				// self.vel.x *= (1f - self.owner.surfaceFriction);
-				// self.vel.x += Mathf.Abs(self.vel.y) * Mathf.Clamp(0.5f - self.owner.surfaceFriction, 0f, 0.5f) * (float)num * 0.2f;
-				// self.vel.y = 0f;
-
-				self.onSlope = num;
-
-				self.slopeRad = self.TerrainRad - 1f;
-
-				// Dune collision code
-				
-				vector = new Vector2(num, 1f).normalized;
-				self.terrainCurveNormal = vector;
-				float num5 = -self.vel.y * vector.y;
-				if (num5 > self.owner.impactTreshhold)
-				{
-					self.owner.TerrainImpact(self.index, new IntVector2(0, -1), num5, self.lastContactPoint.y > -1);
-				}
-				if (self.terrainCurveNormal.y < TerrainCurve.maxSlideNormalY)
-				{
-					self.contactPoint.y = 0;
-					self.vel -= vector * Mathf.Min(0f, Vector2.Dot(self.vel, vector) * (1f + self.owner.bounce * 0.2f));
-					Vector2 vector3 = new Vector2(-vector.y, vector.x);
-					self.vel -= Vector2.Dot(self.vel, vector3) * Mathf.Clamp01(1f - self.owner.surfaceFriction * 2f) * vector3;
-					return;
-				}
-				self.contactPoint.y = -1;
-
-				float magnitude = self.vel.magnitude;
-				float num6 = self.vel.x * -vector.x / vector.y;
-
-				self.vel.y -= num6;
-				self.vel.y = Mathf.Abs(self.vel.y) * self.owner.bounce;
-
-				if (self.vel.y < self.owner.gravity || self.vel.y < 1f + 9f * (1f - self.owner.bounce))
-					self.vel.y = 0f;
-
-				self.vel.y += num6;
-				self.vel.x *= Mathf.Clamp(self.owner.surfaceFriction * 2f, 0f, 1f);
-
-				do {
-					try {
-						if (self.owner is Player player && player.bodyChunks[0] == self)
-							break;
-					}
-					catch(Exception ex) {
-						LogError(ex);
-					}
-					
-					if (options.EnablePatches.Value) self.vel.y = Mathf.Min(0.0f, self.vel.y); // Fix eslides over slopes, and spear bouncing
-				}
-				while (false);
-				
-				self.vel = Vector2.ClampMagnitude(self.vel, magnitude);
-				
-				return;
-			} 
-
-			if (num3 == 1 && self.pos.y >= num2 - self.slopeRad - self.slopeRad)
-			{
-				self.pos.y = num2 - self.slopeRad - self.slopeRad;
-				self.contactPoint.y = 1;
-				self.vel.y = 0f;
-				self.vel.x *= 1f - self.owner.surfaceFriction;
-				self.slopeRad = self.TerrainRad - 1f;
+				LogError($"{il.Method.Name} Il hook match set pos.y failed!");
 			}
 		}
-    }
+		else
+		{
+			LogError($"{il.Method.Name} Il hook match set_onSlope failed!");
+		}
+	}
 
     internal static void Log(object msg)
         => Instance.Logger.LogInfo(msg);
