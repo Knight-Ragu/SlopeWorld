@@ -22,7 +22,7 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 {
     public const string ModID = "knightragu.slopeworld";
     public const string ModName = "Slope World";
-    public const string Version = "1.1.1";
+    public const string Version = "1.1.3";
 
     public static SlopeWorld Instance { get; private set; }
 	public static SlopeWorldOptions options { get; private set; }
@@ -43,14 +43,11 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
         }
     }
 
-    public void BodyChunkMod_IL_BodyChunk_CheckAgainstSlopesVertically(Action<ILContext> _, ILContext _1)
-	{ }
-
 	public static void HookSimplifiedMoveset()
 	{
 		new Hook(
 			typeof(BodyChunkMod).GetMethod("IL_BodyChunk_CheckAgainstSlopesVertically", BindingFlags.NonPublic | BindingFlags.Static),
-			delegate(Action<ILContext> _, ILContext _) {}
+			delegate(Action<ILContext> _, ILContext _) { }
 		);
 	} 
 	
@@ -58,9 +55,18 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
     private bool modInit;
     private void RainWorld_OnModsInit(On.RainWorld.orig_OnModsInit orig, RainWorld self)
     {
-		// Both my IL hooks and simplified moveset's at the same time causes very strange behaviour
 		if (!preModInit)
 			try {
+
+				// Always tell all these functions that onSlope is 0 for both chunks
+				On.Player.Jump += (orig, self) => SpoofOnSlope(orig, self);
+				On.Player.UpdateAnimation += (orig, self) => SpoofOnSlope(orig, self);
+				On.Player.UpdateBodyMode += (orig, self) => SpoofOnSlope(orig, self);
+
+				// Slope crawlturn patch
+				On.Player.MovementUpdate += Player_MovementUpdate;
+
+				// Both my IL hooks and simplified moveset's at the same time causes very strange behaviour
 				if (ModManager.ActiveMods.Exists(m => m.id == "SimplifiedMoveset"))
 				{
 					HookSimplifiedMoveset();
@@ -68,12 +74,14 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 					preModInit = true;
 				}
 			}
-		catch (Exception e)
-		{
-			Logger.LogError(e);
-		}
+			catch (Exception e)
+			{
+				Logger.LogError(e);
+			}
+
 
        	orig(self);
+
 
         if (modInit) return;
         modInit = true;
@@ -87,14 +95,6 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
 			// Make slides work on slopes (thanks to simplified moveset for reference!)
 			IL.Player.UpdateAnimation += Player_UpdateAnimation;
-
-			// Always tell all these functions that the onSlope value is 0
-			On.Player.Jump += (orig, self) => SpoofOnSlope(orig, self);
-			On.Player.UpdateAnimation += (orig, self) => SpoofOnSlope(orig, self);
-			On.Player.UpdateBodyMode += (orig, self) => SpoofOnSlope(orig, self);
-
-			// Slope crawlturn patch
-			On.Player.MovementUpdate += Player_MovementUpdate;
         }
 
         catch (Exception e)
@@ -130,17 +130,15 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
 		if ((options.EnablePatches.Value && onSlope0 != 0) || options.SillyMode.Value)
 		{
-			var input = self.input[0];
 			Vector2 vector = new Vector2(onSlope0, 1f).normalized;
 
-			bool facingRight = chunk0.pos.x - 5f > chunk1.pos.x;
+			bool facingRight = chunk0.pos.x - 4f > chunk1.pos.x;
 
 			if (onSlope0 == -1)
 				facingRight = !facingRight;
 
-			if (input.x == -onSlope0 && facingRight) {
+			if (self.input[0].x == -onSlope0 && facingRight)
 				chunk0.vel += vector * 5f; 
-			}
 			else
 				chunk0.vel.y = Mathf.Min(0.0f, chunk0.vel.y);
 		}
@@ -219,8 +217,8 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
 					Log($"{il.Method.Name} | {c}");
 
-					c.Emit(OpCodes.Ldloc_S, (byte)27);
-					c.Emit(OpCodes.Ldloc_S, (byte)28);
+					c.Emit(OpCodes.Ldloc_S, (byte)31);
+					c.Emit(OpCodes.Ldloc_S, (byte)32);
 
 					c.EmitDelegate<Func<Player, int, int, bool>>((player, num12, num13) =>
 					{
@@ -228,8 +226,11 @@ public sealed partial class SlopeWorld : BaseUnityPlugin
 
 						if (player.room is not Room room) return false;
 						
-						bool head = IsTileSlope(room, player.bodyChunks[0], 0, -1) || IsTileSlope(room, player.bodyChunks[0], 0, -2);
-						bool feet = IsTileSlope(room, player.bodyChunks[1], 0, -1) || IsTileSlope(room, player.bodyChunks[0], 0, -2);
+						var chunk0 = player.bodyChunks[0];
+						var chunk1 = player.bodyChunks[1];
+						
+						bool head = IsTileSlope(room, chunk0, 0, -1) || IsTileSlope(room, chunk0, 0, -2);
+						bool feet = IsTileSlope(room, chunk1, 0, -1) || IsTileSlope(room, chunk1, 0, -2);
 
 						// Log($"Keep sliding: {head || feet}");
 
